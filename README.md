@@ -17,15 +17,24 @@
 
 ## 📋 Формат звіту
 
+Звіт пишеться простою мовою для нетехнічного читача. Ключі Jira автоматично
+перетворюються на клікабельні посилання з назвою задачі, а лист надсилається у
+форматі HTML (з plain-text запасним варіантом).
+
 ```
 Що робив: Розробка та тестування VIN OCR
-В рамках: Задачі AUTOMOTO-123 з інтеграції сервісу OCR
+В рамках: AUTOMOTO-123 — OCR service integration   ← стає посиланням на Jira
 Висновок: Провів тести та зафіксував результати в Confluence
+Jira status: Done
 
 ---
 *This report was generated using AI based on task statistics and monitoring metrics.*
 Model used: OpenAI gpt-4o
 ```
+
+> **Захист від «вигадування»:** кількість пунктів дорівнює реально підтвердженим
+> даним (1–5). Якщо за день немає комітів і закритих задач, звіт будується ВИКЛЮЧНО
+> із записів Clockify (один пункт на запис) і не доповнюється задачами з беклогу.
 
 ## 🔧 Встановлення
 
@@ -81,8 +90,14 @@ CLOCKIFY_API_KEY=your-clockify-api-key
 ```env
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o
-OPENAI_PROMPT_ID=prompt_abc123  # опціонально, для stored prompts
+# OPENAI_PROMPT_ID=prompt_abc123  # ЗАСТАРІЛО: reusable prompt objects вимикають 30.11.2026, не використовується
 ```
+
+> Промпт керується у коді й версіонується в git: `system_role.md` (правила/роль —
+> передається як `instructions`) та `prompt.md` (постановка задачі — додається до `input`).
+> Це відповідає офіційному гайду міграції OpenAI: reusable prompt objects
+> (`OPENAI_PROMPT_ID`) **застаріли** — їх вимикають **30.11.2026**, тож параметр
+> ігнорується (лише попередження в логах) і його можна прибрати з `.env`.
 
 ### Email
 ```env
@@ -110,7 +125,7 @@ python main.py
 ```
 ai-daily-report/
 ├── main.py              # Головний файл
-├── promt.md             # Шаблон промпту
+├── prompt.md            # Шаблон промпту (постановка задачі)
 ├── system_role.md       # Системна роль для OpenAI
 ├── requirements.txt     # Залежності
 ├── .env.example         # Приклад конфігурації
