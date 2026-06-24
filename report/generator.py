@@ -353,6 +353,19 @@ class ReportGenerator:
 
             # Turn bare Jira keys into clickable links with the real task title.
             jira_index = self._build_jira_index(jira_data)
+
+            # Any key mentioned in the report but missing from the fetched buckets
+            # (e.g. a freshly created epic) — resolve its title straight from Jira so
+            # the text always says what the task is about, not just its number.
+            referenced = set(self._JIRA_KEY_RE.findall(generated_report))
+            missing = [k for k in referenced if k not in jira_index]
+            if missing:
+                try:
+                    from jira.client import fetch_issue_index
+                    jira_index.update(await fetch_issue_index(missing))
+                except Exception as e:
+                    logger.warning(f"Could not resolve Jira titles for {missing}: {e}")
+
             generated_report = self._linkify_jira(generated_report, jira_index)
 
             # Add disclaimer

@@ -480,3 +480,37 @@ async def fetch_jira_tasks() -> Dict[str, Any]:
             "all_my_tasks": [],
             "boards": []
         }
+
+
+async def fetch_issue_index(keys: List[str]) -> Dict[str, Dict[str, str]]:
+    """Fetch {key: {summary, url}} for specific issue keys (best-effort).
+
+    Used to resolve the human-readable title of any Jira key mentioned in the
+    report that was not in the pre-fetched buckets (e.g. a freshly created epic).
+    Unknown/inaccessible keys are silently skipped.
+    """
+    keys = [k for k in dict.fromkeys(keys) if k]  # de-dupe, keep order
+    if not keys:
+        return {}
+
+    try:
+        client = JiraClient()
+    except Exception as e:
+        logger.warning(f"Cannot resolve Jira titles (client init failed): {e}")
+        return {}
+
+    index: Dict[str, Dict[str, str]] = {}
+    for key in keys:
+        try:
+            issue = await client._make_request(
+                "GET",
+                f"{client.api_url}/issue/{key}",
+                params={"fields": "summary"}
+            )
+            summary = (issue.get("fields", {}) or {}).get("summary", "") or ""
+            index[key] = {"summary": summary.strip(), "url": f"{client.base_url}/browse/{key}"}
+        except Exception as e:
+            logger.debug(f"Could not fetch Jira issue {key}: {e}")
+            continue
+
+    return index
