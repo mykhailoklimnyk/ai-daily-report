@@ -482,11 +482,13 @@ async def fetch_jira_tasks() -> Dict[str, Any]:
         }
 
 
-async def fetch_issue_index(keys: List[str]) -> Dict[str, Dict[str, str]]:
-    """Fetch {key: {summary, url}} for specific issue keys (best-effort).
+async def fetch_issue_index(keys: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Fetch {key: {summary, url, status, is_mine}} for specific issue keys (best-effort).
 
-    Used to resolve the human-readable title of any Jira key mentioned in the
-    report that was not in the pre-fetched buckets (e.g. a freshly created epic).
+    Used to resolve any Jira key mentioned in the report that was not in the
+    pre-fetched buckets. `is_mine` lets the caller detect keys the model
+    invented: a key that is neither assigned to the current user nor present
+    in commit messages has no place in the report.
     Unknown/inaccessible keys are silently skipped.
     """
     keys = [k for k in dict.fromkeys(keys) if k]  # de-dupe, keep order
@@ -499,16 +501,30 @@ async def fetch_issue_index(keys: List[str]) -> Dict[str, Dict[str, str]]:
         logger.warning(f"Cannot resolve Jira titles (client init failed): {e}")
         return {}
 
-    index: Dict[str, Dict[str, str]] = {}
+    my_account_id = None
+    try:
+        my_account_id = (await client.get_current_user()).get("accountId")
+    except Exception as e:
+        logger.warning(f"Could not resolve current Jira user: {e}")
+
+    index: Dict[str, Dict[str, Any]] = {}
     for key in keys:
         try:
             issue = await client._make_request(
                 "GET",
                 f"{client.api_url}/issue/{key}",
-                params={"fields": "summary"}
+                params={"fields": "summary,status,assignee"}
             )
-            summary = (issue.get("fields", {}) or {}).get("summary", "") or ""
-            index[key] = {"summary": summary.strip(), "url": f"{client.base_url}/browse/{key}"}
+            fields = issue.get("fields", {}) or {}
+            summary = (fields.get("summary") or "").strip()
+            status = ((fields.get("status") or {}).get("name") or "").strip()
+            assignee = fields.get("assignee") or {}
+            index[key] = {
+                "summary": summary,
+                "url": f"{client.base_url}/browse/{key}",
+                "status": status,
+                "is_mine": bool(my_account_id) and assignee.get("accountId") == my_account_id,
+            }
         except Exception as e:
             logger.debug(f"Could not fetch Jira issue {key}: {e}")
             continue

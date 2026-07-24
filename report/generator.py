@@ -104,7 +104,10 @@ class ReportGenerator:
         # Tasks in progress — reference/context only, NOT proof of work done today
         in_progress = jira_data.get("tasks_in_progress", [])
         if in_progress:
-            text += "### В роботі (довідково, НЕ доказ роботи саме сьогодні):\n"
+            text += (
+                "### В роботі (довідково, НЕ доказ роботи саме сьогодні; "
+                "ключі звідси НЕ вказуй у «В рамках», якщо ключа немає в комітах):\n"
+            )
             for task in in_progress:
                 key = task.get("key", "")
                 summary = task.get("summary", "")
@@ -123,17 +126,20 @@ class ReportGenerator:
                 text += f"- {key} — {summary} (Проект: {project})\n"
             text += "\n"
 
-        # All my tasks — name/key reference only, NOT evidence of today's activity
+        # All my tasks — name reference only, NOT evidence of today's activity.
+        # No statuses here: the model copies them onto unrelated report items.
         all_tasks = jira_data.get("all_my_tasks", [])
         if all_tasks:
-            text += f"### Активні задачі (довідник назв/ключів, НЕ доказ роботи сьогодні): {len(all_tasks)}\n"
-            for task in all_tasks[:15]:
+            text += (
+                f"### Активні задачі (лише довідник назв, НЕ доказ роботи сьогодні; "
+                f"ключі звідси НЕ вказуй у «В рамках»): {len(all_tasks)}\n"
+            )
+            for task in all_tasks[:10]:
                 key = task.get("key", "")
                 summary = task.get("summary", "")
-                status = task.get("status", "")
-                text += f"- {key} — {summary} ({status})\n"
-            if len(all_tasks) > 15:
-                text += f"... та ще {len(all_tasks) - 15} задач\n"
+                text += f"- {key} — {summary}\n"
+            if len(all_tasks) > 10:
+                text += f"... та ще {len(all_tasks) - 10} задач\n"
             text += "\n"
 
         if not in_progress and not closed and not all_tasks:
@@ -168,15 +174,16 @@ class ReportGenerator:
 
         return text
 
-    def _build_jira_index(self, jira_data: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
-        """Build a {key: {summary, url}} map from all known Jira tasks.
+    def _build_jira_index(self, jira_data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """Build a {key: {summary, url, status, is_mine}} map from all known Jira tasks.
 
         Used to turn task keys in the generated report into clickable links
-        with the real Jira title. URLs come from real data and are never
-        invented by the model.
+        with the real Jira title and to inject real statuses. URLs, titles and
+        statuses come from real data and are never invented by the model.
+        All buckets are fetched with `assignee = me`, so is_mine is True here.
         """
         base = os.getenv("JIRA_URL", "").rstrip("/")
-        index: Dict[str, Dict[str, str]] = {}
+        index: Dict[str, Dict[str, Any]] = {}
         for bucket in ("tasks_in_progress", "tasks_closed_today", "all_my_tasks"):
             for task in jira_data.get(bucket, []):
                 key = (task.get("key") or "").strip()
@@ -186,11 +193,69 @@ class ReportGenerator:
                 index[key] = {
                     "summary": (task.get("summary") or "").strip(),
                     "url": url,
+                    "status": (task.get("status") or "").strip(),
+                    "is_mine": True,
                 }
         return index
 
     # Matches Jira-like keys (UA-123, AUTOMOTO-45) not already inside a link/URL/word.
     _JIRA_KEY_RE = re.compile(r"(?<![\w/\-\[])([A-Z][A-Z0-9]+-\d+)(?![\w\-])")
+
+    # Looser variant for scanning commit messages, where keys may sit inside
+    # brackets or branch names ("Merge branch 'UA-123-fix'", "[UA-123] fix").
+    _COMMIT_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+
+    def _commit_keys(self, gitlab_commits: List[Dict[str, Any]]) -> set:
+        """Collect Jira keys mentioned in today's commit messages.
+
+        These are the only keys, besides tasks assigned to the user, that are
+        allowed to appear in the report: a key in a commit is real evidence.
+        """
+        keys = set()
+        for commit in gitlab_commits:
+            keys.update(self._COMMIT_KEY_RE.findall(commit.get("message", "") or ""))
+        return keys
+
+    def _strip_keys(self, text: str, keys: set) -> str:
+        """Remove hallucinated Jira keys from the report and tidy punctuation."""
+        for key in keys:
+            text = re.sub(rf"(?<![\w/\-]){re.escape(key)}(?![\w\-])", "", text)
+        text = re.sub(r",\s*,", ", ", text)          # "UA-1, , UA-2" → "UA-1, UA-2"
+        text = re.sub(r":\s*,\s*", ": ", text)       # "В рамках: , UA-2" → "В рамках: UA-2"
+        text = re.sub(r"(:)\s*—\s*", r"\1 ", text)   # "В рамках: — назва" → "В рамках: назва"
+        text = re.sub(r",\s*$", "", text, flags=re.M)
+        text = re.sub(r"^В рамках:\s*$\n?", "", text, flags=re.M)  # nothing left to reference
+        return text
+
+    def _append_statuses(self, text: str, index: Dict[str, Dict[str, Any]]) -> str:
+        """Append a 'Jira status' line to each report item from real Jira data.
+
+        Any status line written by the model is dropped first — the model has
+        proven it will copy statuses from unrelated reference tasks.
+        """
+        text = re.sub(r"^\s*Jira status(?:es)?:.*$\n?", "", text, flags=re.M | re.I)
+
+        parts = re.split(r"(?=^Що робив:)", text, flags=re.M)
+        out = []
+        for part in parts:
+            if not part.startswith("Що робив:"):
+                out.append(part)
+                continue
+            keys = list(dict.fromkeys(self._JIRA_KEY_RE.findall(part)))
+            statused = [
+                (k, index[k]["status"]) for k in keys
+                if index.get(k, {}).get("status")
+            ]
+            if statused:
+                body = part.rstrip("\n")
+                trailing = part[len(body):]
+                if len(statused) == 1:
+                    line = f"Jira status: {statused[0][1]}"
+                else:
+                    line = "Jira status: " + ", ".join(f"{k} — {s}" for k, s in statused)
+                part = f"{body}\n{line}{trailing}"
+            out.append(part)
+        return "".join(out)
 
     def _linkify_jira(self, text: str, index: Dict[str, Dict[str, str]]) -> str:
         """Replace bare Jira keys with markdown links '[KEY — Title](url)'.
@@ -351,12 +416,11 @@ class ReportGenerator:
 
             logger.info("Successfully generated productivity report")
 
-            # Turn bare Jira keys into clickable links with the real task title.
             jira_index = self._build_jira_index(jira_data)
+            commit_keys = self._commit_keys(gitlab_commits)
 
-            # Any key mentioned in the report but missing from the fetched buckets
-            # (e.g. a freshly created epic) — resolve its title straight from Jira so
-            # the text always says what the task is about, not just its number.
+            # Any key mentioned in the report but missing from the fetched buckets —
+            # resolve it straight from Jira to learn its title, status and assignee.
             referenced = set(self._JIRA_KEY_RE.findall(generated_report))
             missing = [k for k in referenced if k not in jira_index]
             if missing:
@@ -366,6 +430,22 @@ class ReportGenerator:
                 except Exception as e:
                     logger.warning(f"Could not resolve Jira titles for {missing}: {e}")
 
+            # A key is legitimate only if it is real evidence (mentioned in a
+            # commit) or a task assigned to the user. Everything else is a
+            # hallucination — the model has interpolated key numbers before,
+            # and decorating them with real titles made the fiction look true.
+            invalid = {
+                k for k in referenced
+                if k not in commit_keys and not jira_index.get(k, {}).get("is_mine", False)
+            }
+            if invalid:
+                logger.warning(f"Removing Jira keys not backed by data: {sorted(invalid)}")
+                generated_report = self._strip_keys(generated_report, invalid)
+
+            # Statuses come from real Jira data, never from the model.
+            generated_report = self._append_statuses(generated_report, jira_index)
+
+            # Turn bare Jira keys into clickable links with the real task title.
             generated_report = self._linkify_jira(generated_report, jira_index)
 
             # Add disclaimer
