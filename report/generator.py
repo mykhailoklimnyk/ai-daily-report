@@ -25,6 +25,12 @@ load_dotenv()
 # Project root for loading templates
 PROJECT_ROOT = Path(__file__).parent.parent
 
+# Default model. Override with OPENAI_MODEL.
+DEFAULT_MODEL = "gpt-5.6-luna"
+
+# Seconds to wait for a response. Override with OPENAI_TIMEOUT.
+DEFAULT_TIMEOUT = 180.0
+
 
 class ReportGenerator:
     """
@@ -40,13 +46,28 @@ class ReportGenerator:
             raise ValueError("OpenAI API key not provided and not found in environment variables")
 
         # Model configuration
-        self.model = os.getenv("OPENAI_MODEL", "gpt-5.2-mini")
-        
+        self.model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+
+        # Reasoning models (gpt-5.x) spend tokens thinking before answering, so
+        # a full report can take noticeably longer than a plain chat completion.
+        try:
+            timeout = float(os.getenv("OPENAI_TIMEOUT", DEFAULT_TIMEOUT))
+        except ValueError:
+            logger.warning(
+                f"Invalid OPENAI_TIMEOUT, falling back to {DEFAULT_TIMEOUT}s"
+            )
+            timeout = DEFAULT_TIMEOUT
+
+        # Optional knobs for gpt-5.x: how long to think and how verbose to be.
+        # Unset means the model's own defaults (currently effort=medium).
+        self.reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT") or None
+        self.verbosity = os.getenv("OPENAI_VERBOSITY") or None
+
         # Prompt ID for stored prompts (if available)
         self.prompt_id = os.getenv("OPENAI_PROMPT_ID")
         
         # OpenAI client
-        self.client = AsyncOpenAI(api_key=self.api_key, timeout=60.0)
+        self.client = AsyncOpenAI(api_key=self.api_key, timeout=timeout)
 
     def _load_prompt_template(self) -> tuple[str, str]:
         """Load the prompt and system role templates from markdown files."""
@@ -389,6 +410,14 @@ class ReportGenerator:
                 "input": user_prompt,
                 "store": False
             }
+
+            # gpt-5.x accepts a reasoning budget and an output verbosity level;
+            # only send them when explicitly configured so that older models
+            # (which reject these fields) keep working unchanged.
+            if self.reasoning_effort:
+                request_params["reasoning"] = {"effort": self.reasoning_effort}
+            if self.verbosity:
+                request_params["text"] = {"verbosity": self.verbosity}
             
             # Reusable prompt objects (OPENAI_PROMPT_ID) are deprecated by OpenAI —
             # announced 2026-06-03, v1/prompts shut down 2026-11-30. Per the official

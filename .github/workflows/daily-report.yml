@@ -34,6 +34,9 @@ jobs:
           # OpenAI
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          OPENAI_TIMEOUT: ${{ secrets.OPENAI_TIMEOUT }}
+          OPENAI_REASONING_EFFORT: ${{ secrets.OPENAI_REASONING_EFFORT }}
+          OPENAI_VERBOSITY: ${{ secrets.OPENAI_VERBOSITY }}
           OPENAI_PROMPT_ID: ${{ secrets.OPENAI_PROMPT_ID }}
           # Email
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}

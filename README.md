@@ -89,7 +89,10 @@ CLOCKIFY_API_KEY=your-clockify-api-key
 ### OpenAI
 ```env
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o
+OPENAI_MODEL=gpt-5.6-luna
+# OPENAI_TIMEOUT=180              # таймаут запиту, сек (reasoning-моделі думають довше)
+# OPENAI_REASONING_EFFORT=medium  # gpt-5.x: minimal|low|medium|high
+# OPENAI_VERBOSITY=medium         # gpt-5.x: low|medium|high
 # OPENAI_PROMPT_ID=prompt_abc123  # ЗАСТАРІЛО: reusable prompt objects вимикають 30.11.2026, не використовується
 ```
 
